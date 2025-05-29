@@ -1,0 +1,140 @@
+# install.packages("shiny")   # Uncomment if not installed
+# install.packages("readxl")  # For Excel files
+
+library(shiny)
+library(readxl)
+
+months <- month.abb  # Jan to Dec
+
+# UI
+ui <- fluidPage(
+  titlePanel("Rainfall Comparison: City 1 vs City 2"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      radioButtons("input_type", "Choose Input Method:",
+                   choices = c("Manual Entry" = "manual", "Upload File" = "file")),
+      
+      conditionalPanel(
+        condition = "input.input_type == 'manual'",
+        h4("Enter Monthly Rainfall (mm)"),
+        textInput("city1", "City 1 Rainfall (comma-separated)", 
+                  "80,70,90,60,50,40,100,110,85,75,65,95"),
+        textInput("city2", "City 2 Rainfall (comma-separated)", 
+                  "60,55,70,50,45,35,80,95,75,65,60,85")
+      ),
+      
+      conditionalPanel(
+        condition = "input.input_type == 'file'",
+        fileInput("datafile", "Choose CSV or Excel File",
+                  accept = c(".csv", ".xlsx", ".xls")),
+        helpText("File must have two columns for rainfall (City1 and City2), with 12 rows each.")
+      ),
+      
+      actionButton("analyze", "Compare")
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Bar Plot", plotOutput("barPlot")),
+        tabPanel("Trend Line", plotOutput("linePlot")),
+        tabPanel("Report", verbatimTextOutput("report"))
+      )
+    )
+  )
+)
+
+# Server
+server <- function(input, output) {
+  
+  dataInput <- reactive({
+    if (input$input_type == "manual") {
+      vals1 <- as.numeric(unlist(strsplit(input$city1, ",")))
+      vals2 <- as.numeric(unlist(strsplit(input$city2, ",")))
+      
+      if (length(vals1) != 12 || length(vals2) != 12) {
+        stop("Please enter exactly 12 values for each city.")
+      }
+      
+      vals1[is.na(vals1)] <- mean(vals1, na.rm = TRUE)
+      vals2[is.na(vals2)] <- mean(vals2, na.rm = TRUE)
+      
+      df <- data.frame(City1 = vals1, City2 = vals2)
+    
+    } else if (input$input_type == "file") {
+      req(input$datafile)
+      ext <- tools::file_ext(input$datafile$name)
+      
+      if (ext == "csv") {
+        df <- read.csv(input$datafile$datapath)
+      } else if (ext %in% c("xlsx", "xls")) {
+        df <- read_excel(input$datafile$datapath)
+      } else {
+        stop("Unsupported file type")
+      }
+      
+      if (ncol(df) < 2 || nrow(df) < 12) {
+        stop("File must contain at least 12 rows and 2 columns.")
+      }
+      
+      df <- df[1:12, 1:2]
+      df <- as.data.frame(lapply(df, function(x) {
+        vals <- as.numeric(x)
+        vals[is.na(vals)] <- mean(vals, na.rm = TRUE)
+        return(vals)
+      }))
+      
+      names(df) <- c("City1", "City2")
+    }
+    
+    return(df)
+  })
+  
+  observeEvent(input$analyze, {
+    output$barPlot <- renderPlot({
+      df <- dataInput()
+      barplot(
+        rbind(df$City1, df$City2),
+        beside = TRUE,
+        col = c("skyblue", "lightgreen"),
+        names.arg = months,
+        legend.text = c("City 1", "City 2"),
+        main = "Monthly Rainfall Comparison",
+        ylab = "Rainfall (mm)"
+      )
+    })
+    
+    output$linePlot <- renderPlot({
+      df <- dataInput()
+      plot(df$City1, type = "o", col = "blue", ylim = range(df),
+           xaxt = "n", xlab = "Month", ylab = "Rainfall (mm)", 
+           main = "Rainfall Trend - City 1 vs City 2")
+      lines(df$City2, type = "o", col = "green")
+      axis(1, at = 1:12, labels = months)
+      legend("topright", legend = c("City 1", "City 2"), col = c("blue", "green"), lty = 1, pch = 1)
+    })
+    
+    output$report <- renderText({
+      df <- dataInput()
+      avg1 <- mean(df$City1)
+      avg2 <- mean(df$City2)
+      result <- if (avg1 > avg2) {
+        "City 1 has higher average rainfall."
+      } else if (avg2 > avg1) {
+        "City 2 has higher average rainfall."
+      } else {
+        "Both cities have equal average rainfall."
+      }
+      
+      paste0(
+        "--- Average Rainfall Report ---\n",
+        "City 1 Average: ", round(avg1, 2), " mm\n",
+        "City 2 Average: ", round(avg2, 2), " mm\n\n",
+        result
+      )
+    })
+  })
+}
+
+# Run the app
+shinyApp(ui = ui, server = server)
